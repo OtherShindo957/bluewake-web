@@ -76,6 +76,25 @@
     It contains no Nintendo code or data. Nintendo, The Legend of Zelda and The Wind Waker are trademarks of
     Nintendo.</p>
 </footer>
+<script>
+// Hosts without the cross-origin isolation headers (GitHub Pages): register
+// isolation-sw.js, which adds them, and reload once under it. app.js waits
+// for bluewakeIsolation, which never resolves when the page is about to reload.
+window.bluewakeIsolation = (async () => {
+  if (self.crossOriginIsolated || !window.isSecureContext || !('serviceWorker' in navigator)) return;
+  const tried = sessionStorage.getItem('bluewake-isolation-reload');
+  if (navigator.serviceWorker.controller && tried) return; // under the worker and still not isolated: give up
+  try {
+    await navigator.serviceWorker.register('isolation-sw.js');
+    await navigator.serviceWorker.ready;
+  } catch (e) {
+    return;
+  }
+  sessionStorage.setItem('bluewake-isolation-reload', '1');
+  location.reload();
+  await new Promise(() => {});
+})();
+</script>
 <script type="module" src="app.js"></script>
 </body>
 </html>

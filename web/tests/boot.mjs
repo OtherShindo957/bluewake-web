@@ -2,14 +2,17 @@
 //
 //   node web/tests/boot.mjs --disc IMAGE --module gGZLE01_recomp.so
 //        [--retraces N] [--seconds S] [--browser chrome|firefox] [--env NAME=VALUE]... [--log FILE]
+//        [--shots DIR] [--shot-every S]
 //
 // Serves build/web/site, imports the disc into a throwaway browser profile,
 // lets the runtime check prepare it (main.dol and the RELs, revision 0
 // verified), imports the game module you built from your disc, then starts
 // the host (?run=game) with BLUEWAKE_MAX_RETRACES=N and waits for it to exit
 // or for S seconds. The host's own "[perf] retrace=..." lines say how far the
-// game ran. The profile, and the copies of the disc and the module in it,
-// are deleted afterwards.
+// game ran. With --shots, the canvas is saved as PNG every --shot-every
+// seconds (default 10) and at the end, to see what the game drew (the files
+// show the game: keep them to yourself). The profile, and the copies of the
+// disc and the module in it, are deleted afterwards.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,6 +33,9 @@ const retraces = +opt('--retraces', 600);
 const seconds = +opt('--seconds', 600);
 const browserName = opt('--browser', 'chrome');
 const logFile = opt('--log', null);
+const shots = opt('--shots', null);
+const shotEvery = +opt('--shot-every', 10);
+if (shots) fs.mkdirSync(shots, { recursive: true });
 const extraEnv = args.flatMap((a, i) => (a === '--env' ? [args[i + 1]] : []));
 if (!disc || !module) {
   console.error('usage: node web/tests/boot.mjs --disc IMAGE --module gGZLE01_recomp.so [--retraces N] [--seconds S]');
@@ -60,6 +66,7 @@ if (browserName === 'chrome') {
   page = ctx.pages()[0] || (await ctx.newPage());
   page.setFile = (sel, file) => page.setInputFiles(sel, file);
   page.waitFn = (fn, timeout) => page.waitForFunction(fn, null, { timeout, polling: 500 });
+  page.shot = (file) => page.locator('#canvas').screenshot({ path: file });
   close = () => ctx.close();
 } else {
   const puppeteer = (await import('puppeteer-core')).default;
@@ -71,6 +78,7 @@ if (browserName === 'chrome') {
   page = await browser.newPage();
   page.setFile = async (sel, file) => (await page.$(sel)).uploadFile(file);
   page.waitFn = (fn, timeout) => page.waitForFunction(fn, { timeout, polling: 500 });
+  page.shot = async (file) => fs.writeFileSync(file, Buffer.from(await (await page.$('#canvas')).screenshot()));
   close = () => browser.close();
 }
 const errors = [];
@@ -100,7 +108,17 @@ try {
   await page.goto(url.href);
   const started = Date.now();
   let last = 0;
+  let nextShot = shotEvery;
+  const shot = async (label) => {
+    if (!shots) return;
+    const file = path.join(shots, `${label}.png`);
+    try { await page.shot(file); console.log(`  screenshot ${file}`); } catch (e) { console.log(`  screenshot failed: ${e.message}`); }
+  };
   while (Date.now() - started < seconds * 1000) {
+    if ((Date.now() - started) / 1000 >= nextShot) {
+      await shot(`t${String(nextShot).padStart(4, '0')}s`);
+      nextShot += shotEvery;
+    }
     const g = await page.evaluate(() => window.bluewake.game && {
       exit: window.bluewake.game.exit, abort: window.bluewake.game.abort,
       retrace: window.bluewake.game.retrace, rate: window.bluewake.game.rate,
@@ -112,6 +130,7 @@ try {
     if (g && (g.exit !== null || g.abort)) break;
     await new Promise((r) => setTimeout(r, 2000));
   }
+  await shot('end');
   const log = await page.evaluate(() => document.getElementById('log').textContent);
   if (logFile) fs.writeFileSync(logFile, log);
   const g = await page.evaluate(() => window.bluewake.game);

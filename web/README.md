@@ -20,6 +20,7 @@ the browser yet.
 | `shell/` | the page: `index.html`, `app.js`, `style.css`, `import-worker.js` (disc copy into private storage) |
 | `tools/translate.py` | your disc → the verified composite source (the Linux builder's own stages, without its desktop toolchain) |
 | `tools/ciso_to_iso.py` | expand a CISO image into the ISO the native builders read |
+| `tools/side_imports.py` | check that the host exports everything a side module (your game module) imports |
 | `tests/smoke.mjs` | browser test in Chrome and Firefox (synthetic images; your disc with `--disc`; the renderer check) |
 | `tests/boot.mjs` | imports your disc and your game module and starts the host; reports how far the game runs |
 
@@ -89,6 +90,18 @@ node web/tests/smoke.mjs --browser firefox
 `BLUEWAKE_TEST_CHROME` and `BLUEWAKE_TEST_FIREFOX` choose the browser
 binaries. Each browser runs headless in a throwaway profile; a disc given with
 `--disc` is copied only into that profile, which is deleted afterwards.
+
+## Hosting
+
+The site in `build/web/site` (`BUILD_TYPE=Release web/build.sh` for a smaller
+download) holds no game code or game data and can be put on any static
+HTTPS host. WebAssembly threads need cross-origin isolation: `web/serve.py`
+sends the two headers; on hosts that cannot (GitHub Pages) the page registers
+`isolation-sw.js`, a service worker that adds them, and reloads once under it
+(`BLUEWAKE_TEST_SERVER=plain node web/tests/smoke.mjs` tests that path).
+`.github/workflows/web-pages.yml` builds the site and publishes it with
+GitHub Pages; it runs only when started by hand, with Settings → Pages →
+Source set to "GitHub Actions". It has not been run.
 
 ## Privacy
 

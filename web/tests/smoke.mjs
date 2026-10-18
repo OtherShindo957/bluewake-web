@@ -282,17 +282,26 @@ if (!fs.existsSync(path.join(site, 'bluewake-runtime.wasm'))) {
   console.error(`${site} has no build: run web/build.sh first`);
   process.exit(2);
 }
-const server = spawn('python3', [path.join(root, 'web/serve.py'), site, '--port', '0'], {
-  env: { ...process.env, BLUEWAKE_SERVE_QUIET: '1' },
-  stdio: ['ignore', 'pipe', 'inherit'],
-});
-const base = await new Promise((resolve, reject) => {
-  server.stdout.on('data', (d) => {
-    const m = /at (http:\/\/[^ ]+\/)/.exec(String(d));
-    if (m) resolve(m[1]);
+// BLUEWAKE_TEST_SERVER=plain serves the site without the isolation headers,
+// as GitHub Pages does: the page must isolate itself (web/shell/isolation-sw.js).
+const plain = process.env.BLUEWAKE_TEST_SERVER === 'plain';
+const port = 18000 + (process.pid % 1000);
+const server = plain
+  ? spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', site], { stdio: ['ignore', 'pipe', 'pipe'] })
+  : spawn('python3', [path.join(root, 'web/serve.py'), site, '--port', '0'], {
+    env: { ...process.env, BLUEWAKE_SERVE_QUIET: '1' },
+    stdio: ['ignore', 'pipe', 'inherit'],
   });
-  server.on('exit', () => reject(new Error('web/serve.py exited')));
-});
+const base = plain
+  ? await new Promise((resolve) => setTimeout(() => resolve(`http://127.0.0.1:${port}/`), 1500))
+  : await new Promise((resolve, reject) => {
+    server.stdout.on('data', (d) => {
+      const m = /at (http:\/\/[^ ]+\/)/.exec(String(d));
+      if (m) resolve(m[1]);
+    });
+    server.on('exit', () => reject(new Error('web/serve.py exited')));
+  });
+if (plain) console.log('serving without isolation headers (as GitHub Pages does)');
 try {
   for (const b of browsers) await testBrowser(b, base);
 } finally {

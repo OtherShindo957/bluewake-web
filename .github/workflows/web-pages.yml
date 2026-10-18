@@ -1,0 +1,46 @@
+name: Web port on GitHub Pages
+# Builds the browser port's site (web/build.sh: the runtime check, the host,
+# the renderer check and the page) and publishes it with GitHub Pages. Run by
+# hand only (Actions tab, "Run workflow"); Settings -> Pages -> Source must be
+# "GitHub Actions". The site holds no game code or game data: players import
+# their own disc image and the game module they built from it, which stay in
+# their browser. GitHub Pages cannot send the cross-origin isolation headers
+# WebAssembly threads need; the page's service worker (web/shell/isolation-sw.js)
+# adds them.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: web-pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install 6.0.12
+          "$HOME/emsdk/emsdk" activate 6.0.12
+      - name: Build the site
+        run: EMSDK="$HOME/emsdk" BUILD_TYPE=Release web/build.sh
+      - name: Check that the site holds no game module
+        run: |
+          ! find build/web/site -name 'gGZLE01_recomp*' | grep .
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web/site
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

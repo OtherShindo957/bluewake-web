@@ -352,6 +352,7 @@ $('start').addEventListener('click', () => {
   location.href = url.href;
 });
 
+await window.bluewakeIsolation; // a page about to reload under isolation-sw.js stops here
 await checkCapabilities();
 await showStoredDisc();
 await showStoredModule();

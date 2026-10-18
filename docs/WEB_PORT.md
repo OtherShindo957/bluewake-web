@@ -97,6 +97,29 @@ Each milestone is listed with what was actually run. "Compiles" never means
 
 Newest first.
 
+### 2026-10-17 (late night) — hosting, and one copy of the game module
+
+- **Hosting.** `web/shell/isolation-sw.js` adds the cross-origin isolation
+  headers on hosts that cannot send them (GitHub Pages); the page registers
+  it and reloads once. Checked: the smoke test served by a plain
+  `http.server` without the headers, 24/24 in Chrome.
+  `.github/workflows/web-pages.yml` builds and publishes the site (no game
+  code), run by hand only; not run.
+- **One copy of the game module.** Emscripten shares a compiled side module
+  with the other workers only when the browser's main thread loaded it.
+  BlueWake loads it on the host's worker, so each other thread (the main
+  thread's asynchronous catch-up, WasmFS's OPFS worker, audio and pipeline
+  threads) would copy and compile its own instance of a module of hundreds
+  of megabytes. `web/runtime/dylink_sync.js` loads side modules only on the
+  thread the entry records (`web_dylink.c`); the others keep their function
+  tables in step without instantiating it. Checked: the runtime check's log
+  shows the main thread and a worker skipping the side module, which the
+  loader thread loads and calls.
+- **Module size.** Objects come to 0.61 of the C source: about 530 MB of
+  objects for 868 MB of C. `-Os`/`-Oz` do not shrink a chunk (1.61 MB of
+  code against 1.57 MB at -O2): translated PowerPC is straight-line code.
+  Browsers accept modules up to 1 GB.
+
 ### 2026-10-17 (night) — the host and the renderer for the browser
 
 - **Host.** `runtime/host/src` (the Linux list without the ImGui menus and

@@ -83,6 +83,10 @@ if (browserName === 'chrome') {
 }
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
+// The game's log, as it arrives (?echo=1): kept even if the tab crashes.
+const consoleLines = [];
+page.on('console', (m) => consoleLines.push(m.text()));
+const flushConsole = () => { if (logFile) fs.writeFileSync(logFile, consoleLines.join('\n') + '\n'); };
 
 const t0 = Date.now();
 const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)} s`;
@@ -104,6 +108,7 @@ try {
 
   const url = new URL(base);
   url.searchParams.set('run', 'game');
+  url.searchParams.set('echo', '1');
   for (const e of [`BLUEWAKE_MAX_RETRACES=${retraces}`, ...extraEnv]) url.searchParams.append('env', e);
   await page.goto(url.href);
   const started = Date.now();
@@ -132,7 +137,7 @@ try {
   }
   await shot('end');
   const log = await page.evaluate(() => document.getElementById('log').textContent);
-  if (logFile) fs.writeFileSync(logFile, log);
+  flushConsole();
   const g = await page.evaluate(() => window.bluewake.game);
   const lines = log.split('\n').filter((l) => l && !l.startsWith('[perf]'));
   console.log(lines.slice(0, 80).join('\n'));
@@ -143,6 +148,8 @@ try {
   code = g.abort || errors.length ? 1 : g.retrace >= retraces ? 0 : 1;
 } catch (e) {
   console.log(`boot test: ${e && e.stack ? e.stack : e}`);
+  flushConsole();
+  console.log(`last log lines before that:\n${consoleLines.slice(-40).join('\n')}`);
 } finally {
   await close();
   server.kill();

@@ -259,8 +259,11 @@ async function startGame() {
   log.textContent = '';
   log.parentElement.open = true;
   const game = (state.game = { started: performance.now(), exit: null, abort: null, retrace: 0, rate: 0, lines: 0 });
+  // ?echo=1: the log also goes to the browser console (tests keep it if the tab dies).
+  const echo = new URLSearchParams(location.search).get('echo') === '1';
   const line = (text) => {
     game.lines++;
+    if (echo) console.log(text);
     const m = /^\[perf\] retrace=(\d+) rate=([\d.]+)/.exec(text);
     if (m) {
       game.retrace = +m[1];

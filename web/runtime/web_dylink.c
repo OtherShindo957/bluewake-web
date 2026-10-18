@@ -22,3 +22,10 @@ EMSCRIPTEN_KEEPALIVE int bluewake_dl_loads_here(void)
     const pthread_t loader = atomic_load(&s_loader_thread);
     return loader == 0 || pthread_equal(loader, pthread_self());
 }
+
+// 1 once an entry recorded a loader thread (dylink_sync.js frees the module's
+// file bytes after loading then).
+EMSCRIPTEN_KEEPALIVE int bluewake_dl_loader_recorded(void)
+{
+    return atomic_load(&s_loader_thread) != 0;
+}

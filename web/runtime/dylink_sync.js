@@ -37,10 +37,29 @@ addToLibrary({
     return handle;
   },
 
-  _dlopen_js__deps: ['$dlopenInternal', '$bluewakeLoadsHere', '$bluewakeKeepTableInStep'],
+  // Once loaded here, nothing reads the file's bytes again (the other threads
+  // do not load the module): give their copy in linear memory back, which
+  // for the game module is hundreds of megabytes. Only when a loader thread
+  // was recorded; otherwise the other threads still need them.
+  $bluewakeFreeFileData__deps: ['bluewake_dl_loader_recorded', 'free'],
+  $bluewakeFreeFileData: (handle) => {
+    if (!_bluewake_dl_loader_recorded()) return;
+    var data = {{{ makeGetValue('handle', C_STRUCTS.dso.file_data, '*') }}};
+    if (!data) return;
+    _free(data);
+    {{{ makeSetValue('handle', C_STRUCTS.dso.file_data, 0, '*') }}};
+    {{{ makeSetValue('handle', C_STRUCTS.dso.file_data_size, 0, '*') }}};
+  },
+
+  _dlopen_js__deps: ['$dlopenInternal', '$bluewakeLoadsHere', '$bluewakeKeepTableInStep',
+                     '$bluewakeFreeFileData'],
   _dlopen_js__async: false,
-  _dlopen_js: (handle) => bluewakeLoadsHere() ? dlopenInternal(handle, { loadAsync: false })
-                                              : bluewakeKeepTableInStep(handle),
+  _dlopen_js: (handle) => {
+    if (!bluewakeLoadsHere()) return bluewakeKeepTableInStep(handle);
+    var result = dlopenInternal(handle, { loadAsync: false });
+    if (result) bluewakeFreeFileData(handle);
+    return result;
+  },
 
   _emscripten_dlopen_js__deps: ['$dlopenInternal', '$callUserCallback', '$dlSetError',
                                 '$bluewakeLoadsHere', '$bluewakeKeepTableInStep'],

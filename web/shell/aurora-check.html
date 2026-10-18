@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Renderer check</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <section>
+    <h2>Renderer check</h2>
+    <p>Starts BlueWake's renderer (Aurora, on this browser's WebGPU) on a worker thread without a game, runs it
+      for three seconds and shuts it down. A development check: <a href="./">back to BlueWake Web</a>.</p>
+    <div id="stage"><canvas id="canvas" width="640" height="480"></canvas></div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script type="module">
+const log = document.getElementById('log');
+const check = (window.auroraCheck = { lines: [], done: false, abort: null });
+const line = (text) => {
+  check.lines.push(text);
+  log.textContent += text + '\n';
+  if (text === '[aurora-check] done') check.done = true;
+};
+try {
+  const { default: create } = await import('./bluewake-aurora-check.mjs');
+  await create({ canvas: document.getElementById('canvas'), print: line, printErr: line,
+    onAbort: (what) => { check.abort = String(what); line(`[web] aborted: ${what}`); } });
+} catch (e) {
+  check.abort = String(e && e.message ? e.message : e);
+  line(`[web] the check did not start: ${check.abort}`);
+}
+</script>
+</body>
+</html>

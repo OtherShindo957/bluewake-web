@@ -18,9 +18,9 @@ Each milestone is listed with what was actually run. "Compiles" never means
 | 1b | Browser runtime starts: threads, JSPI, OPFS, CPU core, shared disc importer, dlopen of a side module, WebGPU frames on the canvas | **done, tested** (`web/tests/smoke.mjs`): Chrome 154 25/25 with the user's disc (imported in 6 s, revision 0 verified and main.dol + 415 RELs prepared in OPFS in 3.6 s, the last WebGPU frame read back from a screenshot); Firefox 156 24/24 with the disc (headless; its canvas pixel checked in a headful run, 23/23) |
 | 2 | Your disc → verified composite source on this machine | **done, tested**: `web/tools/translate.py` reproduces the profile's composite digest `54f54434…a770a` from the user's GZLE01 rev 0 ISO (16 s) |
 | 2b | One translated chunk compiles to wasm and loads in both browsers | **done, tested**: the 2.2 MB `chunk_0081` (one of the four largest) compiles at -O2 (94 s, 675 MB); its function is 1,573,770 bytes of code (browsers allow 7,654,321); V8 validates and compiles it (Liftoff 0.2 s, TurboFan 2.2 s); Firefox 156 and Chrome 154 compile the module |
-| 2c | The whole game module compiles and links as a wasm side module | in progress |
-| 3 | The host loads the module and boots the game headless (game logic, no picture) | not started |
-| 4 | Aurora renders through WebGPU | not started |
+| 2c | The whole game module compiles and links as a wasm side module | in progress (compiling) |
+| 3 | The host loads the module and boots the game | **host built and tested up to the module load**: the unchanged host and the donor DSP link as the main module; in Chrome it starts, dlopens a side module from private storage and stops at its missing `staticrecomp_get_module`, as it must for a module that is not the game (`web/tests/boot.mjs`) |
+| 4 | Aurora renders through WebGPU | **renderer starts, untested with the game**: Aurora initializes on the browser's WebGPU (adapter, device with BC/ASTC/dual-source blending, surface on the canvas, SDL3 window and audio, pipeline cache, gxcore renderer), runs and shuts down in Chrome 154 and Firefox 156 (`aurora-check.html`, in `web/tests/smoke.mjs`); no game frame has been drawn yet |
 | 5 | Audio (AudioWorklet), input (keyboard, Gamepad API), saves in OPFS | not started |
 | 6 | Playable | not started |
 
@@ -96,6 +96,40 @@ Each milestone is listed with what was actually run. "Compiles" never means
 ## Development log
 
 Newest first.
+
+### 2026-10-17 (night) — the host and the renderer for the browser
+
+- **Host.** `runtime/host/src` (the Linux list without the ImGui menus and
+  the Wii U HD-texture importer) and the donor DSP compile unchanged and link
+  as `bluewake.wasm`. `web/runtime/web_host_main.c` is the browser's
+  `linux_entry.c`. `settings_menu.h` lists the browser with the platforms
+  that have their own menus (the only shared change; native builds see no
+  difference). Checked in Chrome: the host dlopens a module from OPFS.
+- **Selective exports.** `MAIN_MODULE=1` links every archive whole, and
+  CMake repeats archives on the link line for circular dependencies
+  (`duplicate symbol` for xxhash, then ImGui). `MAIN_MODULE=2` exports only
+  `web/runtime/main_module_exports.txt`: the C library functions the game
+  module imports (from its objects: `atexit calloc fiprintf fma free getenv
+  ldexp ldexpf stderr`, with a margin). Sizes: runtime check 13.4 → 4.4 MB,
+  headless host 25.6 → 16.1 MB.
+- **Aurora on WebGPU** (`web/patches/recompcore/0001-aurora-on-browser-webgpu.patch`,
+  applied by `web/build.sh` to a worktree of the pinned RecompCore):
+  emdawnwebgpu as Dawn, SDL3 from Emscripten's port, no Dawn-native paths,
+  canvas surface, Core adapter, render worker not started (a WebGPU device
+  belongs to one thread; items run inline, marked as the worker while they
+  run), GX FIFO worker off (`DOL_GX_FIFO_WORKER=0`, an existing switch),
+  present and buffer-map waits as JSPI suspensions. Problems met: ImGui's
+  WebGPU backend refused emdawnwebgpu under `__EMSCRIPTEN__` (compiled as
+  Dawn's); `wgpu::LoggingType` is Dawn-only; two `uint64_t`→`size_t`
+  narrowings (32-bit); `execinfo.h`; Aurora's own `main()` was linked because
+  the browser entry had another signature; `aurora_begin_frame` never
+  returned (a buffer map waited for in a sleep loop, which a browser never
+  completes); "must run on the render worker" checks; `FS.rmdir is not a
+  function` (SDL3's drag-and-drop folder needs the JS FS API:
+  `FORCE_FILESYSTEM`); a stale `GXRUNTIME_AURORA_DIR` cache entry pointed at
+  the unpatched tree.
+- Checked: `web/tests/smoke.mjs` 47/47 (Chrome and Firefox, the renderer
+  check included).
 
 ### 2026-10-17 (evening) — the browser runtime check
 

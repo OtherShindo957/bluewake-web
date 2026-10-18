@@ -1,0 +1,390 @@
+Aurora on the browser's WebGPU (emdawnwebgpu) and SDL3 (Emscripten port)
+
+BlueWake web port (web/), applied by web/build.sh to a worktree of the pinned
+RecompCore in build/web/recompcore; every change is limited to __EMSCRIPTEN__
+or EMSCRIPTEN, so other builds compile as before.
+
+- aurora_core/aurora_gx: no WEBGPU_DAWN and no Dawn window binding or Tracy
+  platform: webgpu.h is emdawnwebgpu over the page's WebGPU.
+- extern: ImGui 1.91's Dawn code path fits emdawnwebgpu, which is Dawn's own
+  webgpu.h, but under __EMSCRIPTEN__ its backend expects Emscripten's older
+  bindings: imgui_impl_wgpu.cpp is compiled without __EMSCRIPTEN__.
+- gpu.cpp: the surface is the page's canvas (#canvas, transferred to the
+  worker); a Core adapter (a browser may hand out a reduced compatibility-mode
+  adapter when asked for Compatibility); Dawn's logging callbacks only with
+  Dawn.
+- render_worker: not started in a browser, where a WebGPU device and its
+  objects belong to the thread that made them; items run where queued (the
+  existing path before initialize()), with the thread counted as the render
+  worker while it runs one, as the checks in the work expect.
+- common.cpp, texture.cpp: waits for a buffer map suspend to the event loop
+  (emscripten_sleep), the only place a browser completes one; sleeping in
+  place waited forever.
+- aurora.cpp: present is a JSPI suspension (emscripten_sleep(0)): the browser
+  shows the canvas's frame when its thread returns to the event loop, and
+  emdawnwebgpu has no wgpuSurfacePresent.
+- rmlui.hpp: <webgpu/webgpu_cpp.h>, as the rest of Aurora includes it.
+- dds_io.cpp, texture_replacement.cpp: texture sizes cast to size_t (32-bit).
+- aurora_graphics.cpp: no backtrace()/thread-signal stall stacks (as on
+  Windows; DOL_GX_STALL_STACKS is a Mac and Linux diagnostic).
+
+diff --git a/GXRuntime/backends/aurora/aurora_graphics.cpp b/GXRuntime/backends/aurora/aurora_graphics.cpp
+index e173087..449f985 100644
+--- a/GXRuntime/backends/aurora/aurora_graphics.cpp
++++ b/GXRuntime/backends/aurora/aurora_graphics.cpp
+@@ -23,7 +23,9 @@
+ #include <thread>
+ #include <vector>
+ #if !defined(_WIN32)
++#if !defined(__EMSCRIPTEN__)
+ #include <execinfo.h>
++#endif
+ #include <pthread.h>
+ #include <signal.h>
+ #include <unistd.h>
+@@ -518,6 +520,7 @@ std::atomic<long long> g_batch_start_ns{0};
+ #if !defined(_WIN32)
+ std::atomic<pthread_t> g_fifo_pthread{};
+ 
++#if !defined(__EMSCRIPTEN__)
+ void stall_stack_handler(int) {
+     void* frames[48];
+     const int n = backtrace(frames, 48);
+@@ -527,6 +530,7 @@ void stall_stack_handler(int) {
+     static const char kFooter[] = "[gx-stall-stack] end\n";
+     (void)!write(2, kFooter, sizeof kFooter - 1);
+ }
++#endif
+ 
+ #endif
+ 
+@@ -536,9 +540,9 @@ long long monotonic_ns() {
+         .count();
+ }
+ 
+-#if defined(_WIN32)
+-// Windows has no backtrace() or thread signals: DOL_GX_STALL_STACKS is a
+-// Mac and Linux diagnostic.
++#if defined(_WIN32) || defined(__EMSCRIPTEN__)
++// Windows and the browser have no backtrace() or thread signals:
++// DOL_GX_STALL_STACKS is a Mac and Linux diagnostic.
+ void start_stall_watchdog() {}
+ #else
+ void start_stall_watchdog() {
+diff --git a/GXRuntime/graphics/aurora/cmake/aurora_core.cmake b/GXRuntime/graphics/aurora/cmake/aurora_core.cmake
+index c4b4bf2..3d647ef 100644
+--- a/GXRuntime/graphics/aurora/cmake/aurora_core.cmake
++++ b/GXRuntime/graphics/aurora/cmake/aurora_core.cmake
+@@ -56,14 +56,21 @@ if(AURORA_ENABLE_RMLUI)
+ endif ()
+ 
+ if (AURORA_ENABLE_GX)
+-    target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
++    target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX)
+     target_sources(aurora_core PRIVATE
+             lib/webgpu/gpu.cpp
+             lib/webgpu/gpu_cache.cpp
+             lib/webgpu/gpu_prof.cpp
+-            lib/dawn/BackendBinding.cpp
+-            lib/dawn/TracyPlatform.cpp
+     )
++    # In a browser, webgpu.h is emdawnwebgpu over the page's WebGPU: there is
++    # no Dawn native instance, window binding or Tracy platform.
++    if (NOT EMSCRIPTEN)
++        target_compile_definitions(aurora_core PUBLIC WEBGPU_DAWN)
++        target_sources(aurora_core PRIVATE
++                lib/dawn/BackendBinding.cpp
++                lib/dawn/TracyPlatform.cpp
++        )
++    endif ()
+     if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+         set_source_files_properties(lib/dawn/TracyPlatform.cpp PROPERTIES COMPILE_FLAGS -fno-rtti)
+     endif ()
+diff --git a/GXRuntime/graphics/aurora/cmake/aurora_gx.cmake b/GXRuntime/graphics/aurora/cmake/aurora_gx.cmake
+index 9c7499d..934bcd7 100644
+--- a/GXRuntime/graphics/aurora/cmake/aurora_gx.cmake
++++ b/GXRuntime/graphics/aurora/cmake/aurora_gx.cmake
+@@ -50,7 +50,9 @@ set_target_properties(aurora_gx PROPERTIES FOLDER "aurora")
+ 
+ target_link_libraries(aurora_gx PUBLIC aurora::core dawn::webgpu_dawn xxhash)
+ target_link_libraries(aurora_gx PRIVATE absl::btree absl::flat_hash_map sqlite3 TracyClient PNG::PNG)
+-target_compile_definitions(aurora_gx PRIVATE WEBGPU_DAWN)
++if (NOT EMSCRIPTEN)
++  target_compile_definitions(aurora_gx PRIVATE WEBGPU_DAWN)
++endif ()
+ 
+ if (AURORA_ENABLE_RMLUI)
+     target_sources(aurora_gx PRIVATE
+diff --git a/GXRuntime/graphics/aurora/extern/CMakeLists.txt b/GXRuntime/graphics/aurora/extern/CMakeLists.txt
+index b887894..d7fa0db 100644
+--- a/GXRuntime/graphics/aurora/extern/CMakeLists.txt
++++ b/GXRuntime/graphics/aurora/extern/CMakeLists.txt
+@@ -214,6 +214,13 @@ if (AURORA_ENABLE_GX)
+       ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
+     )
+     target_compile_definitions(imgui_backends PRIVATE IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
++    if (EMSCRIPTEN)
++      # Emscripten's webgpu.h is emdawnwebgpu, Dawn's own: ImGui 1.91's Dawn
++      # code path fits it, but under __EMSCRIPTEN__ the backend expects
++      # Emscripten's older bindings and refuses to be told otherwise.
++      set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
++        PROPERTIES COMPILE_OPTIONS "-U__EMSCRIPTEN__")
++    endif ()
+     target_link_libraries(imgui_backends PRIVATE imgui ${AURORA_SDL3_TARGET} dawn::webgpu_dawn)
+     target_link_libraries(imgui PUBLIC imgui_backends)
+ 
+diff --git a/GXRuntime/graphics/aurora/lib/aurora.cpp b/GXRuntime/graphics/aurora/lib/aurora.cpp
+index 576bf13..46be9c5 100644
+--- a/GXRuntime/graphics/aurora/lib/aurora.cpp
++++ b/GXRuntime/graphics/aurora/lib/aurora.cpp
+@@ -1,3 +1,6 @@
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++#endif
+ #include <aurora/aurora.h>
+ 
+ #ifdef AURORA_ENABLE_GX
+@@ -528,7 +531,15 @@ void end_frame() noexcept {
+         window::SurfaceLock surfaceLock;
+         if (window::is_presentable()) {
+           const auto presentStart = std::chrono::steady_clock::now();
++#ifdef __EMSCRIPTEN__
++          // The browser shows a canvas's frame when the thread that owns it
++          // returns to its event loop: JSPI suspends here while it does
++          // (emdawnwebgpu has no wgpuSurfacePresent).
++          emscripten_sleep(0);
++          status = wgpu::Status::Success;
++#else
+           status = g_surface.Present();
++#endif
+           const auto presentMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - presentStart)
+                                      .count();
+diff --git a/GXRuntime/graphics/aurora/lib/gfx/common.cpp b/GXRuntime/graphics/aurora/lib/gfx/common.cpp
+index f5ab9cf..026a8f7 100644
+--- a/GXRuntime/graphics/aurora/lib/gfx/common.cpp
++++ b/GXRuntime/graphics/aurora/lib/gfx/common.cpp
+@@ -1,3 +1,6 @@
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++#endif
+ #include "common.hpp"
+ 
+ #include "clear.hpp"
+@@ -490,7 +493,15 @@ static void wait_for_gpu_progress(std::chrono::nanoseconds sleepDuration) {
+   if (render_worker::is_idle()) {
+     enqueue_process_events();
+   }
++#ifdef __EMSCRIPTEN__
++  // A buffer map (or any GPU callback) completes in a browser only when this
++  // thread returns to its event loop: suspend there (JSPI) instead of
++  // sleeping in place, which would wait forever.
++  (void)sleepDuration;
++  emscripten_sleep(0);
++#else
+   std::this_thread::sleep_for(sleepDuration);
++#endif
+ }
+ 
+ static void pace_frame_start() {
+@@ -2200,7 +2211,11 @@ static void dump_texture(const webgpu::TextureWithSampler& texture, const char*
+                   });
+   while (!done.load(std::memory_order_acquire)) {
+     process_events();
++#ifdef __EMSCRIPTEN__
++    emscripten_sleep(0);
++#else
+     std::this_thread::sleep_for(std::chrono::microseconds{200});
++#endif
+   }
+   if (!ok) {
+     return;
+diff --git a/GXRuntime/graphics/aurora/lib/gfx/dds_io.cpp b/GXRuntime/graphics/aurora/lib/gfx/dds_io.cpp
+index 39a96dc..6255241 100644
+--- a/GXRuntime/graphics/aurora/lib/gfx/dds_io.cpp
++++ b/GXRuntime/graphics/aurora/lib/gfx/dds_io.cpp
+@@ -293,7 +293,7 @@ std::optional<ConvertedTexture> parse_dds_bytes(ArrayRef<uint8_t> bytes) noexcep
+     return std::nullopt;
+   }
+ 
+-  ByteBuffer data{expectedSize};
++  ByteBuffer data{static_cast<size_t>(expectedSize)};
+   std::memcpy(data.data(), bytes.data() + parsedLayout->dataOffset, expectedSize);
+   return ConvertedTexture{
+       .format = parsedLayout->format,
+diff --git a/GXRuntime/graphics/aurora/lib/gfx/render_worker.cpp b/GXRuntime/graphics/aurora/lib/gfx/render_worker.cpp
+index 4e52d33..4b986ad 100644
+--- a/GXRuntime/graphics/aurora/lib/gfx/render_worker.cpp
++++ b/GXRuntime/graphics/aurora/lib/gfx/render_worker.cpp
+@@ -104,9 +104,20 @@ void enqueue(QueueItem item) {
+   }
+ 
+   if (!g_running.load(std::memory_order_acquire)) {
++#ifdef __EMSCRIPTEN__
++    // In a browser this is how every item runs (initialize() starts no
++    // worker): while it runs, this thread is the render worker, as the
++    // checks in the work expect.
++    g_isWorkerThread = true;
+     if (item.work) {
+       item.work();
+     }
++    g_isWorkerThread = false;
++#else
++    if (item.work) {
++      item.work();
++    }
++#endif
+     complete_sync(item.sync);
+     return;
+   }
+@@ -226,6 +237,12 @@ size_t FrameSlotPool::free_count() const {
+ }
+ 
+ void initialize() {
++#ifdef __EMSCRIPTEN__
++  // In a browser a WebGPU device and its objects belong to the thread that
++  // made them (emdawnwebgpu): the worker is not started, and every item runs
++  // where it is queued, as before initialize() (enqueue's inline path).
++  return;
++#endif
+   if (g_running.exchange(true, std::memory_order_acq_rel)) {
+     return;
+   }
+diff --git a/GXRuntime/graphics/aurora/lib/gfx/texture.cpp b/GXRuntime/graphics/aurora/lib/gfx/texture.cpp
+index fff70f7..7304d9c 100644
+--- a/GXRuntime/graphics/aurora/lib/gfx/texture.cpp
++++ b/GXRuntime/graphics/aurora/lib/gfx/texture.cpp
+@@ -1,3 +1,6 @@
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++#endif
+ #include "common.hpp"
+ 
+ #include "../internal.hpp"
+@@ -287,7 +290,15 @@ std::vector<uint8_t> read_texture_rgba8(const wgpu::Texture& texture, wgpu::Exte
+   std::unique_lock lock(result->mutex);
+   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+   while (!result->done && std::chrono::steady_clock::now() < deadline) {
++#ifdef __EMSCRIPTEN__
++    // The map completes only when this thread's event loop runs (see
++    // wait_for_gpu_progress in common.cpp).
++    lock.unlock();
++    emscripten_sleep(0);
++    lock.lock();
++#else
+     result->cv.wait_for(lock, std::chrono::milliseconds(10));
++#endif
+     if (!result->done) {
+       lock.unlock();
+       render_worker::enqueue_work([] { webgpu::g_instance.ProcessEvents(); });
+diff --git a/GXRuntime/graphics/aurora/lib/gfx/texture_replacement.cpp b/GXRuntime/graphics/aurora/lib/gfx/texture_replacement.cpp
+index 40d9393..2a9f6fe 100644
+--- a/GXRuntime/graphics/aurora/lib/gfx/texture_replacement.cpp
++++ b/GXRuntime/graphics/aurora/lib/gfx/texture_replacement.cpp
+@@ -650,7 +650,7 @@ std::optional<aurora::gfx::ConvertedTexture> load_file_replacement(const Replace
+     return std::nullopt;
+   }
+ 
+-  aurora::ByteBuffer blob{n};
++  aurora::ByteBuffer blob{static_cast<size_t>(n)};
+   uint8_t* const dst = blob.data();
+   uint64_t o = 0;
+   const auto append = [&](const aurora::ByteBuffer& d) noexcept -> bool {
+diff --git a/GXRuntime/graphics/aurora/lib/rmlui.hpp b/GXRuntime/graphics/aurora/lib/rmlui.hpp
+index 787bb2d..b969dec 100644
+--- a/GXRuntime/graphics/aurora/lib/rmlui.hpp
++++ b/GXRuntime/graphics/aurora/lib/rmlui.hpp
+@@ -5,7 +5,7 @@
+ 
+ #include <SDL3/SDL_events.h>
+ #include <aurora/rmlui.hpp>
+-#include <dawn/webgpu_cpp.h>
++#include <webgpu/webgpu_cpp.h>
+ 
+ namespace aurora::rmlui {
+ 
+diff --git a/GXRuntime/graphics/aurora/lib/webgpu/gpu.cpp b/GXRuntime/graphics/aurora/lib/webgpu/gpu.cpp
+index 8c362f0..fcc66ef 100644
+--- a/GXRuntime/graphics/aurora/lib/webgpu/gpu.cpp
++++ b/GXRuntime/graphics/aurora/lib/webgpu/gpu.cpp
+@@ -73,6 +73,7 @@ static std::atomic_bool g_initialized = false;
+ 
+ namespace {
+ 
++#ifdef WEBGPU_DAWN
+ AuroraLogLevel wgpu_log_level(wgpu::LoggingType type) {
+   switch (type) {
+   case wgpu::LoggingType::Verbose:
+@@ -91,6 +92,7 @@ AuroraLogLevel wgpu_log_level(wgpu::LoggingType type) {
+ void wgpu_log(wgpu::LoggingType type, wgpu::StringView message) {
+   Log.report(wgpu_log_level(type), "WebGPU message: {}", message);
+ }
++#endif
+ 
+ struct ResampleUniformBlock {
+   uint32_t samplerMode = 0;
+@@ -739,6 +741,22 @@ static void release_surface_locked() noexcept {
+ }
+ 
+ static bool create_surface() {
++#ifdef __EMSCRIPTEN__
++  // The page's canvas, transferred to this worker (OFFSCREENCANVASES_TO_PTHREAD).
++  wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector canvas{};
++  canvas.selector = "#canvas";
++  const wgpu::SurfaceDescriptor surfaceDescriptor{
++      .nextInChain = &canvas,
++      .label = "Surface",
++  };
++  release_surface_locked();
++  g_surface = g_instance.CreateSurface(&surfaceDescriptor);
++  if (!g_surface) {
++    Log.error("Failed to create surface on #canvas");
++    return false;
++  }
++  return true;
++#else
+   SDL_Window* window = window::get_sdl_window();
+   if (window == nullptr) {
+     Log.error("Failed to create surface: no window");
+@@ -761,6 +779,7 @@ static bool create_surface() {
+     return false;
+   }
+   return true;
++#endif
+ }
+ 
+ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+@@ -800,7 +819,13 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+   }
+   {
+     const wgpu::RequestAdapterOptions options{
++#ifdef __EMSCRIPTEN__
++        // A browser may hand out a reduced compatibility-mode adapter when
++        // asked for one; the full WebGPU feature level is what pages get.
++        .featureLevel = wgpu::FeatureLevel::Core,
++#else
+         .featureLevel = wgpu::FeatureLevel::Compatibility,
++#endif
+         .powerPreference = wgpu::PowerPreference::HighPerformance,
+         .backendType = backend,
+         .compatibleSurface = g_surface,
+@@ -872,7 +897,9 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+         .maxStorageBuffersInFragmentStage = 2,
+     }};
+     const wgpu::Limits requiredLimits{
++#ifndef __EMSCRIPTEN__
+         .nextInChain = &compatibilityModeLimits,
++#endif
+         // Use "best" supported limits
+         .maxTextureDimension1D = supportedLimits.maxTextureDimension1D == 0 ? WGPU_LIMIT_U32_UNDEFINED
+                                                                             : supportedLimits.maxTextureDimension1D,
+@@ -1052,7 +1079,9 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+     if (!g_device) {
+       return false;
+     }
++#ifdef WEBGPU_DAWN
+     g_device.SetLoggingCallback(wgpu_log);
++#endif
+   }
+   g_queue = g_device.GetQueue();
+ 

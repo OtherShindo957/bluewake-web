@@ -6,19 +6,22 @@ the player's browser from their own disc. Design, decisions and status:
 [docs/WEB_PORT.md](../docs/WEB_PORT.md).
 
 **Status: early development.** The browser runtime starts and passes its
-checks; the game module compiles to WebAssembly from your disc. The game does
-not run in the browser yet.
+checks; the host and the renderer (Aurora on WebGPU) build and start; the
+game module compiles to WebAssembly from your disc. The game has not run in
+the browser yet.
 
 | Path | What |
 | --- | --- |
 | `build.sh` | fetch the pinned RecompCore (as every builder does), configure `build/web/` with `emcmake`, build |
 | `serve.py` | local server with the cross-origin isolation headers WebAssembly threads need |
-| `CMakeLists.txt` | browser targets: `bluewake_web_runtime` (the runtime check), `bluewake_web_site` (the page) |
-| `runtime/` | browser-only C/C++: the runtime check (`web_main.c`), its WebGPU part (`web_gpu.cpp`), a side-module fixture (`web_side_test.c`) |
+| `CMakeLists.txt` | browser targets: `bluewake_web_runtime` (the runtime check), `bluewake_web_host` (the host, `bluewake.mjs`), `bluewake_web_aurora_check` (the renderer check), `bluewake_web_site` (the page) |
+| `runtime/` | browser-only code: the runtime check (`web_main.c`, `web_gpu.cpp`), the host's entry (`web_host_main.c`), the renderer check (`web_aurora_check.c`), the no-renderer stand-in for `AURORA=0` builds (`web_aurora_stub.c`), a side-module fixture (`web_side_test.c`), the main module's exports (`main_module_exports.txt`), an Emscripten loader override (`dylink_sync.js`) |
+| `patches/recompcore/` | RecompCore changes for the browser, applied by `build.sh` to a worktree of the pinned commit in `build/web/recompcore` (`ref/recompcore` stays exactly as pinned for the native builders) |
 | `shell/` | the page: `index.html`, `app.js`, `style.css`, `import-worker.js` (disc copy into private storage) |
 | `tools/translate.py` | your disc → the verified composite source (the Linux builder's own stages, without its desktop toolchain) |
 | `tools/ciso_to_iso.py` | expand a CISO image into the ISO the native builders read |
-| `tests/smoke.mjs` | browser test in Chrome and Firefox (synthetic images; your disc with `--disc`) |
+| `tests/smoke.mjs` | browser test in Chrome and Firefox (synthetic images; your disc with `--disc`; the renderer check) |
+| `tests/boot.mjs` | imports your disc and your game module and starts the host; reports how far the game runs |
 
 ## Toolchain
 

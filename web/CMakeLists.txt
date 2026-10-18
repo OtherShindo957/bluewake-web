@@ -32,11 +32,39 @@ set(BLUEWAKE_WEB_OUT ${CMAKE_BINARY_DIR}/site)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_compile_options("-ffile-prefix-map=${BLUEWAKE_REPO_ROOT}/=" -pthread -fPIC)
 
-# GXRuntime's portable core only, for now; Aurora (WebGPU through
-# emdawnwebgpu) joins when the host does.
-set(GXRUNTIME_ENABLE_AURORA OFF CACHE BOOL "" FORCE)
-set(GXRUNTIME_ENABLE_AURORA_RECOMP OFF CACHE BOOL "" FORCE)
+# Aurora, the renderer, on the browser's WebGPU (milestone 4, in progress):
+# Dawn's webgpu.h comes from emdawnwebgpu and SDL3 from Emscripten's port,
+# handed to Aurora's "system" providers as the targets it expects.
+option(BLUEWAKE_WEB_AURORA "Build Aurora on WebGPU (work in progress)" OFF)
+if(BLUEWAKE_WEB_AURORA)
+    add_library(bluewake_web_emdawnwebgpu INTERFACE)
+    target_compile_options(bluewake_web_emdawnwebgpu INTERFACE --use-port=emdawnwebgpu)
+    target_link_options(bluewake_web_emdawnwebgpu INTERFACE --use-port=emdawnwebgpu)
+    add_library(dawn::webgpu_dawn ALIAS bluewake_web_emdawnwebgpu)
+    add_library(dawn::dawncpp_headers ALIAS bluewake_web_emdawnwebgpu)
+    set(Dawn_FOUND TRUE)
+    set(AURORA_DAWN_PROVIDER system CACHE STRING "" FORCE)
+    add_library(bluewake_web_sdl3_port INTERFACE)
+    target_compile_options(bluewake_web_sdl3_port INTERFACE --use-port=sdl3)
+    target_link_options(bluewake_web_sdl3_port INTERFACE --use-port=sdl3)
+    add_library(SDL3::SDL3-static ALIAS bluewake_web_sdl3_port)
+    set(SDL3_FOUND TRUE)
+    set(AURORA_SDL3_PROVIDER system CACHE STRING "" FORCE)
+    set(AURORA_SDL3_LINKAGE static CACHE STRING "" FORCE)
+    set(AURORA_CACHE_USE_ZSTD OFF CACHE BOOL "" FORCE)
+    set(GXRUNTIME_ENABLE_AURORA ON CACHE BOOL "" FORCE)
+    set(GXRUNTIME_ENABLE_AURORA_RECOMP ON CACHE BOOL "" FORCE)
+else()
+    set(GXRUNTIME_ENABLE_AURORA OFF CACHE BOOL "" FORCE)
+    set(GXRUNTIME_ENABLE_AURORA_RECOMP OFF CACHE BOOL "" FORCE)
+endif()
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# GXRuntime caches where its Aurora is: always the tree configured here (the
+# patched one web/build.sh prepares), never one cached by an earlier configure.
+set(GXRUNTIME_AURORA_DIR "${GXRUNTIME_DIR}/graphics/aurora" CACHE PATH "" FORCE)
+# Static libraries only: Aurora's dependencies build shared ones when this is
+# undefined, and the game module is the only side module.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${GXRUNTIME_DIR} gxruntime_build EXCLUDE_FROM_ALL)
 
 # Link flags shared by the browser executables.
@@ -46,14 +74,20 @@ add_subdirectory(${GXRUNTIME_DIR} gxruntime_build EXCLUDE_FROM_ALL)
 #   device requests, yielding a frame) suspend the wasm stack instead of the
 #   whole program being rewritten (Asyncify) - the game module is far too
 #   large for that.
-# - WASMFS + OPFS: real open/pread on the player's disc and saves.
-# - MAIN_MODULE: the translated game is loaded with dlopen as a side module,
-#   exactly as the desktop host loads gGZLE01_recomp.so.
+# - WASMFS + OPFS: real open/pread on the player's disc and saves. With the
+#   whole JavaScript FS API (FORCE_FILESYSTEM): SDL3's port uses it (its
+#   drag-and-drop folder) and fails without it.
+# - MAIN_MODULE=2: the translated game is loaded with dlopen as a side module,
+#   exactly as the desktop host loads gGZLE01_recomp.so. Only the symbols a
+#   side module imports are exported (runtime/main_module_exports.txt, the C
+#   library functions the game module calls); MAIN_MODULE=1 would export and
+#   link every archive whole, which CMake's repeated archives make collide.
 # - The 8 MiB stack is the desktop default; CPUState and the host keep large
 #   structures on it.
 set(BLUEWAKE_WEB_LINK_FLAGS
     -pthread -sPROXY_TO_PTHREAD -sJSPI
-    -sWASMFS -sMAIN_MODULE=1
+    -sWASMFS -sFORCE_FILESYSTEM -sMAIN_MODULE=2
+    -sEXPORTED_FUNCTIONS=@${CMAKE_CURRENT_SOURCE_DIR}/runtime/main_module_exports.txt
     -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=128MB -sMAXIMUM_MEMORY=4GB
     -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=2MB
     -sOFFSCREENCANVAS_SUPPORT -sOFFSCREENCANVASES_TO_PTHREAD=\#canvas
@@ -76,7 +110,7 @@ target_link_libraries(bluewake_web_runtime PRIVATE gxruntime)
 # The runtime stays alive after main() returns, and with it the worker that
 # owns the canvas: Firefox blanks a canvas whose worker has ended.
 target_link_options(bluewake_web_runtime PRIVATE ${BLUEWAKE_WEB_LINK_FLAGS} -sEXIT_RUNTIME=0)
-set_property(TARGET bluewake_web_runtime APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/dylink_sync.js)
+set_property(TARGET bluewake_web_runtime APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/dylink_sync.js ${CMAKE_CURRENT_SOURCE_DIR}/runtime/main_module_exports.txt)
 set_target_properties(bluewake_web_runtime PROPERTIES
     OUTPUT_NAME bluewake-runtime SUFFIX ".mjs"
     LINKER_LANGUAGE CXX
@@ -120,8 +154,12 @@ FetchContent_Declare(xxhash
     URL_HASH SHA256=aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80
     SOURCE_SUBDIR cmake_unofficial DOWNLOAD_EXTRACT_TIMESTAMP FALSE EXCLUDE_FROM_ALL)
 set(XXHASH_BUILD_XXHSUM OFF CACHE INTERNAL "")
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(fmt xxhash)
+if(NOT TARGET fmt::fmt)
+    FetchContent_MakeAvailable(fmt)
+endif()
+if(NOT TARGET xxhash)
+    FetchContent_MakeAvailable(xxhash)
+endif()
 
 add_library(bluewake_web_zlib INTERFACE)
 target_compile_options(bluewake_web_zlib INTERFACE -sUSE_ZLIB=1)
@@ -168,8 +206,13 @@ set(BLUEWAKE_WEB_HOST_SOURCES
 
 add_executable(bluewake_web_host EXCLUDE_FROM_ALL
     runtime/web_host_main.c
-    runtime/web_aurora_stub.c
     ${BLUEWAKE_WEB_HOST_SOURCES})
+if(BLUEWAKE_WEB_AURORA)
+    target_link_libraries(bluewake_web_host PRIVATE GXRuntime::aurora)
+    target_compile_definitions(bluewake_web_host PRIVATE BLUEWAKE_WEB_AURORA=1)
+else()
+    target_sources(bluewake_web_host PRIVATE runtime/web_aurora_stub.c)
+endif()
 set_source_files_properties(${BLUEWAKE_HOST_SRC}/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=bluewake_host_main")
 target_include_directories(bluewake_web_host PRIVATE
@@ -187,27 +230,23 @@ target_compile_definitions(bluewake_web_host PRIVATE
     # What linking aurora::core gives its users (Aurora's dolphin/types.h).
     TARGET_PC=1)
 target_compile_options(bluewake_web_host PRIVATE -Wno-unused-function)
-# xxhash and zlib also come through the DSP donor; MAIN_MODULE links whole
-# archives, so each library may appear only once.
+# xxhash and zlib also come through the DSP donor.
 target_link_libraries(bluewake_web_host PRIVATE gxruntime bluewake_web_sdl3)
 target_link_options(bluewake_web_host PRIVATE ${BLUEWAKE_WEB_LINK_FLAGS} -sEXIT_RUNTIME=1
     -sEXPORTED_RUNTIME_METHODS=callMain,stringToNewUTF8)
-set_property(TARGET bluewake_web_host APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/dylink_sync.js)
+set_property(TARGET bluewake_web_host APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/dylink_sync.js ${CMAKE_CURRENT_SOURCE_DIR}/runtime/main_module_exports.txt)
 set_target_properties(bluewake_web_host PROPERTIES
     OUTPUT_NAME bluewake SUFFIX ".mjs"
     LINKER_LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY ${BLUEWAKE_WEB_OUT})
 add_dependencies(bluewake_web_host bluewake_web_site)
 
-# The donor DSP, as linux/CMakeLists.txt builds it, without the DSP packet
-# capture logger (DSPCaptureLogger.cpp, a debugging aid that needs Dolphin's
-# Common::PCAP): MAIN_MODULE links whole archives, so every object in them
-# must link.
+# The donor DSP, as linux/CMakeLists.txt builds it.
 set(_donor ${BLUEWAKE_RECOMPCORE})
 set(_dsp ${_donor}/Source/Core/Core/DSP)
 add_library(bluewake_web_dsp_donor STATIC EXCLUDE_FROM_ALL
     ${_dsp}/DSPAccelerator.cpp ${_dsp}/DSPAnalyzer.cpp ${_dsp}/DSPAssembler.cpp
-    ${_dsp}/DSPCodeUtil.cpp ${_dsp}/DSPCore.cpp
+    ${_dsp}/DSPCaptureLogger.cpp ${_dsp}/DSPCodeUtil.cpp ${_dsp}/DSPCore.cpp
     ${_dsp}/DSPDisassembler.cpp ${_dsp}/DSPHWInterface.cpp ${_dsp}/DSPMemoryMap.cpp
     ${_dsp}/DSPStacks.cpp ${_dsp}/DSPTables.cpp ${_dsp}/LabelMap.cpp
     ${_dsp}/Interpreter/DSPIntArithmetic.cpp ${_dsp}/Interpreter/DSPIntBranch.cpp
@@ -248,3 +287,15 @@ target_include_directories(bluewake_web_dsp_adapter PRIVATE ${GXRUNTIME_DIR}/inc
 target_link_libraries(bluewake_web_dsp_adapter PUBLIC bluewake_web_dsp_donor)
 target_compile_definitions(bluewake_web_host PRIVATE BLUEWAKE_HAS_DSP_ADAPTER=1)
 target_link_libraries(bluewake_web_host PRIVATE bluewake_web_dsp_adapter)
+
+# The renderer check (milestone 4, work in progress): Aurora's startup on the
+# page's canvas, without a game.
+if(BLUEWAKE_WEB_AURORA)
+    add_executable(bluewake_web_aurora_check EXCLUDE_FROM_ALL runtime/web_aurora_check.c)
+    target_link_libraries(bluewake_web_aurora_check PRIVATE GXRuntime::aurora)
+    target_link_options(bluewake_web_aurora_check PRIVATE ${BLUEWAKE_WEB_LINK_FLAGS} -sEXIT_RUNTIME=0)
+    set_target_properties(bluewake_web_aurora_check PROPERTIES
+        OUTPUT_NAME bluewake-aurora-check SUFFIX ".mjs" LINKER_LANGUAGE CXX
+        RUNTIME_OUTPUT_DIRECTORY ${BLUEWAKE_WEB_OUT})
+    add_dependencies(bluewake_web_aurora_check bluewake_web_site)
+endif()

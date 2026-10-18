@@ -257,7 +257,17 @@ async function testBrowser(name, base) {
       const near = Math.abs(px[0] - 26) <= 3 && Math.abs(px[1] - 115) <= 3 && Math.abs(px[2] - 204) <= 3;
       expect(near, 'canvas shows the last WebGPU frame', `centre pixel rgb(${px.join(', ')}), expected rgb(26, 115, 204)`);
     }
-    const pageErrors = [...errors, ...(await s.evaluate(() => window.bluewake.errors))];
+    if (fs.existsSync(path.join(site, 'bluewake-aurora-check.wasm'))) {
+      // The renderer (Aurora on WebGPU) starts, runs and stops without a game.
+      await s.goto(base + 'aurora-check.html');
+      await s.waitFor(() => window.auroraCheck && (window.auroraCheck.done || window.auroraCheck.abort), 120000);
+      const a = await s.evaluate(() => window.auroraCheck);
+      const api = a.lines.find((l) => /API: /.test(l)) || a.lines.find((l) => / API: /.test(l));
+      const init = a.lines.find((l) => l.startsWith('[aurora-check] initialized'));
+      expect(a.done && !a.abort && !!init, 'renderer starts and stops (Aurora on WebGPU)',
+        a.abort || [api && api.trim(), a.lines.find((l) => /host turns/.test(l))].filter(Boolean).join('; '));
+    }
+    const pageErrors = [...errors, ...(await s.evaluate(() => (window.bluewake ? window.bluewake.errors : [])))];
     const gpuErrors = log.filter((l) => /\[webgpu\] (error|device lost)/.test(l));
     expect(pageErrors.length === 0 && gpuErrors.length === 0, 'no page or WebGPU errors', [...pageErrors, ...gpuErrors].join(' | '));
   } catch (e) {

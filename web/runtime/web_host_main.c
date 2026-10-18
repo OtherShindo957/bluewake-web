@@ -69,8 +69,12 @@ static int mount_opfs(void)
     return 0;
 }
 
-int main(void)
+// main(argc, argv), as Aurora's own entry (aurora::main) defines it: with that
+// signature, this is the program's entry and Aurora's is never linked.
+int main(int argc, char** argv)
 {
+    (void)argc;
+    (void)argv;
     printf("[web] BlueWake host starting\n");
     if (mount_opfs() != 0)
         return 1;
@@ -78,12 +82,20 @@ int main(void)
     mkdir(BLUEWAKE_DIR "/user", 0777);
     apply_page_env();
 
-    // The Linux shim's defaults (linux/src/linux_entry.c), except the
-    // renderer, which is headless until Aurora runs on WebGPU here.
+    // The Linux shim's defaults (linux/src/linux_entry.c).
     bw_default("BLUEWAKE_PERF_LOG", "1");
     bw_default("BLUEWAKE_WALL_PACE", "1");
     bw_default("DOL_AUDIO_NO_THROTTLE", "1");
+#if BLUEWAKE_WEB_AURORA
+    // BLUEWAKE_RENDERER unset: Aurora, and headless if it cannot start (no
+    // WebGPU in this browser), as the desktop host does without a window.
+    // A WebGPU device belongs to the thread that made it (emdawnwebgpu): GX
+    // is translated on the guest's thread, which owns the canvas, instead of
+    // on Aurora's FIFO worker thread.
+    bw_default("DOL_GX_FIFO_WORKER", "0");
+#else
     bw_default("BLUEWAKE_RENDERER", "headless");
+#endif
     bw_default("BLUEWAKE_CYCLE_CAP", "16384");
     bw_default("BLUEWAKE_MAX_BLOCKS", "100000000000");
     bw_default("BLUEWAKE_DSP_MODE", "hle");
@@ -112,8 +124,8 @@ int main(void)
                 getenv("BLUEWAKE_DOL"));
         return 1;
     }
-    char* argv[] = {"bluewake", (char*)module, NULL};
-    const int rc = bluewake_host_main(2, argv);
+    char* host_argv[] = {"bluewake", (char*)module, NULL};
+    const int rc = bluewake_host_main(2, host_argv);
     printf("[web] host exited with %d\n", rc);
     return rc;
 }

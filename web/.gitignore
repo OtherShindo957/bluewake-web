@@ -1,0 +1,2 @@
+# Test dependencies (npm install in web/tests)
+tests/node_modules/

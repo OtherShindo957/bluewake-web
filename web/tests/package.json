@@ -1,0 +1,10 @@
+{
+  "name": "bluewake-web-tests",
+  "private": true,
+  "description": "Browser tests for the BlueWake web build",
+  "type": "module",
+  "devDependencies": {
+    "playwright": "^1",
+    "puppeteer-core": "^24"
+  }
+}

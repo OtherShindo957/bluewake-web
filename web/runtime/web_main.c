@@ -31,6 +31,8 @@
 #include "disc_import.h"
 #include "web_check.h"
 
+void bluewake_dl_set_loader_thread(void);
+
 #define OPFS_ROOT "/opfs"
 #define BLUEWAKE_DIR OPFS_ROOT "/bluewake"
 #define DISC_PATH BLUEWAKE_DIR "/disc.iso"
@@ -341,6 +343,7 @@ int main(void)
         check_disc();
     else
         web_check_skip("disc", "needs the origin-private file system");
+    bluewake_dl_set_loader_thread();
     check_dlopen();
     const char* frames = getenv("BLUEWAKE_WEB_FRAMES");
     bluewake_web_gpu_check(frames != NULL ? atoi(frames) : 60);

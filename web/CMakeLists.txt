@@ -100,6 +100,7 @@ set(BLUEWAKE_WEB_LINK_FLAGS
 add_executable(bluewake_web_runtime
     runtime/web_main.c
     runtime/web_gpu.cpp
+    runtime/web_dylink.c
     ${BLUEWAKE_HOST_SRC}/cold_fallback.c
     ${BLUEWAKE_REPO_ROOT}/apple/ios/src/disc_import.c)
 target_include_directories(bluewake_web_runtime PRIVATE
@@ -206,6 +207,7 @@ set(BLUEWAKE_WEB_HOST_SOURCES
 
 add_executable(bluewake_web_host EXCLUDE_FROM_ALL
     runtime/web_host_main.c
+    runtime/web_dylink.c
     ${BLUEWAKE_WEB_HOST_SOURCES})
 if(BLUEWAKE_WEB_AURORA)
     target_link_libraries(bluewake_web_host PRIVATE GXRuntime::aurora)

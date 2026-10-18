@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 
 int bluewake_host_main(int argc, char** argv);
+void bluewake_dl_set_loader_thread(void);
 
 #define OPFS_ROOT "/opfs"
 #define BLUEWAKE_DIR OPFS_ROOT "/bluewake"
@@ -124,6 +125,8 @@ int main(int argc, char** argv)
                 getenv("BLUEWAKE_DOL"));
         return 1;
     }
+    // This thread loads the game module and runs it (web_dylink.c).
+    bluewake_dl_set_loader_thread();
     char* host_argv[] = {"bluewake", (char*)module, NULL};
     const int rc = bluewake_host_main(2, host_argv);
     printf("[web] host exited with %d\n", rc);

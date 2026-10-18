@@ -51,7 +51,7 @@ EOF
 bdir=build/web
 jobs=${JOBS:-$(nproc 2>/dev/null || echo 4)}
 targets=("$@")
-(( ${#targets[@]} )) || targets=(bluewake_web_runtime bluewake_web_site)
+(( ${#targets[@]} )) || targets=(bluewake_web_runtime bluewake_web_host bluewake_web_site)
 
 emcmake cmake -S web -B "$bdir" -DCMAKE_BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}" >/dev/null
 for t in "${targets[@]}"; do

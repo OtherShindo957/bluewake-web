@@ -35,6 +35,24 @@
     <p id="disc-status" class="status">Checking storage…</p>
   </section>
 
+  <section id="game">
+    <h2>Your game module</h2>
+    <p>The game code is translated from your disc and compiled on your own computer
+      (<code>web/README.md</code>, "Your game module"); it is never downloaded from this site. Choose the
+      <code>gGZLE01_recomp.so</code> you built to keep it in this browser's private storage.</p>
+    <div class="row">
+      <label class="button" id="pick-module-label">Choose game module…
+        <input type="file" id="pick-module" accept=".so,.wasm" hidden>
+      </label>
+      <button id="remove-module" hidden>Remove stored module</button>
+      <button id="start" disabled>Start game</button>
+    </div>
+    <progress id="module-progress" max="1" value="0" hidden></progress>
+    <p id="module-status" class="status">Checking storage…</p>
+    <p class="status">The renderer is not ported yet: the game runs without a picture, and its progress shows
+      in the log below.</p>
+  </section>
+
   <section id="runtime">
     <h2>Runtime check</h2>
     <p>Starts the WebAssembly runtime on a worker thread: the GameCube CPU state and memory, the shared disc

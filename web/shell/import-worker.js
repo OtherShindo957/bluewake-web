@@ -9,6 +9,9 @@
 // to disc.iso with a marker (disc.json); an interrupted copy is never used.
 // Preparing the game files from it (main.dol and the RELs) happens in the
 // runtime, with the same importer the other platforms use.
+//
+// The player's game module (gGZLE01_recomp.so, a WebAssembly side module they
+// built from their disc) is stored the same way, as bluewake/gGZLE01_recomp.so.
 
 const CHUNK = 8 << 20;
 const CISO_HEADER = 0x8000;
@@ -106,6 +109,28 @@ async function commit(size, name) {
   }
 }
 
+async function copyModule(file, progress) {
+  const dir = await bluewakeDir();
+  await remove(dir, 'gGZLE01_recomp.so.part');
+  const part = await dir.getFileHandle('gGZLE01_recomp.so.part', { create: true });
+  const out = await part.createSyncAccessHandle();
+  try {
+    out.truncate(0);
+    for (let at = 0; at < file.size; at += CHUNK) {
+      const bytes = await readSlice(file, at, Math.min(file.size, at + CHUNK));
+      if (out.write(bytes, { at }) !== bytes.length) throw new Error('the browser stored only part of the module (storage full?)');
+      progress(Math.min(file.size, at + CHUNK) / file.size);
+    }
+    out.flush();
+    if (out.getSize() !== file.size) throw new Error('the stored module has the wrong size');
+  } finally {
+    out.close();
+  }
+  await remove(dir, 'gGZLE01_recomp.so');
+  await part.move('gGZLE01_recomp.so');
+  return file.size;
+}
+
 onmessage = async (event) => {
   const { op, file, kind } = event.data;
   try {
@@ -117,6 +142,17 @@ onmessage = async (event) => {
       });
       await commit(size, file.name);
       postMessage({ type: 'done', size });
+    } else if (op === 'import-module') {
+      let last = -1;
+      const size = await copyModule(file, (fraction) => {
+        const percent = Math.floor(fraction * 100);
+        if (percent !== last) { last = percent; postMessage({ type: 'progress', fraction }); }
+      });
+      postMessage({ type: 'done', size });
+    } else if (op === 'remove-module') {
+      const dir = await bluewakeDir();
+      for (const name of ['gGZLE01_recomp.so', 'gGZLE01_recomp.so.part']) await remove(dir, name);
+      postMessage({ type: 'done' });
     } else if (op === 'remove') {
       const dir = await bluewakeDir();
       for (const name of ['disc.json', 'disc.iso', 'disc.iso.part']) await remove(dir, name);
@@ -124,7 +160,11 @@ onmessage = async (event) => {
       postMessage({ type: 'done' });
     }
   } catch (e) {
-    try { await remove(await bluewakeDir(), 'disc.iso.part'); } catch (_) { /* keep the first error */ }
+    try {
+      const dir = await bluewakeDir();
+      await remove(dir, 'disc.iso.part');
+      await remove(dir, 'gGZLE01_recomp.so.part');
+    } catch (_) { /* keep the first error */ }
     postMessage({ type: 'error', message: e && e.message ? e.message : String(e) });
   }
 };

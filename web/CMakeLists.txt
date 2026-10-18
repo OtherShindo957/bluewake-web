@@ -100,3 +100,151 @@ add_custom_target(bluewake_web_site ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${BLUEWAKE_WEB_SHELL} ${BLUEWAKE_WEB_OUT}
     COMMENT "Copying the web page into ${BLUEWAKE_WEB_OUT}")
 add_dependencies(bluewake_web_runtime bluewake_web_site)
+
+# --- The host (milestone 3) ----------------------------------------------
+# The unchanged host (runtime/host/src) with the same sources as
+# linux/CMakeLists.txt, except the settings and texture-pack menus (ImGui on
+# Aurora) and the Wii U HD-texture importer (wwhd/), which come with the
+# renderer. Its entry is web/runtime/web_host_main.c, the browser's
+# linux_entry.c. Until Aurora runs on WebGPU here, the renderer API the host
+# calls is answered by web/runtime/web_aurora_stub.c, so the host takes its
+# own headless path, as it does natively without a window.
+include(FetchContent)
+# The same pins as Aurora's own fetches (GXRuntime/graphics/aurora/extern).
+FetchContent_Declare(fmt
+    URL https://github.com/fmtlib/fmt/archive/refs/tags/12.1.0.tar.gz
+    URL_HASH SHA256=ea7de4299689e12b6dddd392f9896f08fb0777ac7168897a244a6d6085043fea
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE EXCLUDE_FROM_ALL)
+FetchContent_Declare(xxhash
+    URL https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.3.tar.gz
+    URL_HASH SHA256=aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80
+    SOURCE_SUBDIR cmake_unofficial DOWNLOAD_EXTRACT_TIMESTAMP FALSE EXCLUDE_FROM_ALL)
+set(XXHASH_BUILD_XXHSUM OFF CACHE INTERNAL "")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(fmt xxhash)
+
+add_library(bluewake_web_zlib INTERFACE)
+target_compile_options(bluewake_web_zlib INTERFACE -sUSE_ZLIB=1)
+target_link_options(bluewake_web_zlib INTERFACE -sUSE_ZLIB=1)
+add_library(bluewake_web_sdl3 INTERFACE)
+target_compile_options(bluewake_web_sdl3 INTERFACE --use-port=sdl3)
+target_link_options(bluewake_web_sdl3 INTERFACE --use-port=sdl3)
+
+set(BLUEWAKE_WEB_HOST_SOURCES
+    ${BLUEWAKE_HOST_SRC}/main.c
+    ${BLUEWAKE_HOST_SRC}/aram_dma.c
+    ${BLUEWAKE_HOST_SRC}/audio_capture.c
+    ${BLUEWAKE_HOST_SRC}/audio_watch.c
+    ${BLUEWAKE_HOST_SRC}/ipl_sram.c
+    ${BLUEWAKE_HOST_SRC}/card_runtime.c
+    ${BLUEWAKE_HOST_SRC}/callback_delivery.c
+    ${BLUEWAKE_HOST_SRC}/cycle_domain.c
+    ${BLUEWAKE_HOST_SRC}/delivery_digest.c
+    ${BLUEWAKE_HOST_SRC}/edge_intercepts.c
+    ${BLUEWAKE_HOST_SRC}/return_census.c
+    ${BLUEWAKE_HOST_SRC}/interrupt_sources.c
+    ${BLUEWAKE_HOST_SRC}/cold_fallback.c
+    ${BLUEWAKE_HOST_SRC}/external_memory.c
+    ${BLUEWAKE_HOST_SRC}/fpu_context.c
+    ${BLUEWAKE_HOST_SRC}/pad_event_schedule.c
+    ${BLUEWAKE_HOST_SRC}/pad_waypoint.c
+    ${BLUEWAKE_HOST_SRC}/pad_wire.c
+    ${BLUEWAKE_HOST_SRC}/rel_scratch_allocator.c
+    ${BLUEWAKE_HOST_SRC}/scheduler_contract.c
+    ${BLUEWAKE_HOST_SRC}/fast_load.c
+    ${BLUEWAKE_HOST_SRC}/dpad_menus.c
+    ${BLUEWAKE_HOST_SRC}/jump_button.c
+    ${BLUEWAKE_HOST_SRC}/climb.c
+    ${BLUEWAKE_HOST_SRC}/save_state.c
+    ${BLUEWAKE_HOST_SRC}/sprint.c
+    ${BLUEWAKE_HOST_SRC}/quick_doors.c
+    ${BLUEWAKE_HOST_SRC}/haptics.c
+    ${BLUEWAKE_HOST_SRC}/draw_tags.c
+    ${BLUEWAKE_HOST_SRC}/forest_water.c
+    ${BLUEWAKE_HOST_SRC}/hd_look.c
+    ${BLUEWAKE_HOST_SRC}/fps_watch.c
+    ${BLUEWAKE_HOST_SRC}/game_options.c
+    ${BLUEWAKE_HOST_SRC}/mouse_camera.c)
+
+add_executable(bluewake_web_host EXCLUDE_FROM_ALL
+    runtime/web_host_main.c
+    runtime/web_aurora_stub.c
+    ${BLUEWAKE_WEB_HOST_SOURCES})
+set_source_files_properties(${BLUEWAKE_HOST_SRC}/main.c PROPERTIES
+    COMPILE_DEFINITIONS "main=bluewake_host_main")
+target_include_directories(bluewake_web_host PRIVATE
+    ${BLUEWAKE_HOST_SRC}
+    ${BLUEWAKE_REPO_ROOT}/windows/src
+    ${BLUEWAKE_REPO_ROOT}/apple/ios/src
+    ${GXRUNTIME_DIR}/include
+    ${GXRUNTIME_DIR}/graphics/aurora/include
+    ${BLUEWAKE_RECOMPCORE}/Source/Core/Core/PowerPC/StaticRecomp)
+target_compile_definitions(bluewake_web_host PRIVATE
+    DOLRECOMP_CPU_HEADER="core/cpu.h"
+    BLUEWAKE_ENABLE_DEVELOPER_TRACING=0
+    BLUEWAKE_EDGE_CENSUS=0
+    BLUEWAKE_WEB=1
+    # What linking aurora::core gives its users (Aurora's dolphin/types.h).
+    TARGET_PC=1)
+target_compile_options(bluewake_web_host PRIVATE -Wno-unused-function)
+# xxhash and zlib also come through the DSP donor; MAIN_MODULE links whole
+# archives, so each library may appear only once.
+target_link_libraries(bluewake_web_host PRIVATE gxruntime bluewake_web_sdl3)
+target_link_options(bluewake_web_host PRIVATE ${BLUEWAKE_WEB_LINK_FLAGS} -sEXIT_RUNTIME=1
+    -sEXPORTED_RUNTIME_METHODS=callMain,stringToNewUTF8)
+set_property(TARGET bluewake_web_host APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/dylink_sync.js)
+set_target_properties(bluewake_web_host PROPERTIES
+    OUTPUT_NAME bluewake SUFFIX ".mjs"
+    LINKER_LANGUAGE CXX
+    RUNTIME_OUTPUT_DIRECTORY ${BLUEWAKE_WEB_OUT})
+add_dependencies(bluewake_web_host bluewake_web_site)
+
+# The donor DSP, as linux/CMakeLists.txt builds it, without the DSP packet
+# capture logger (DSPCaptureLogger.cpp, a debugging aid that needs Dolphin's
+# Common::PCAP): MAIN_MODULE links whole archives, so every object in them
+# must link.
+set(_donor ${BLUEWAKE_RECOMPCORE})
+set(_dsp ${_donor}/Source/Core/Core/DSP)
+add_library(bluewake_web_dsp_donor STATIC EXCLUDE_FROM_ALL
+    ${_dsp}/DSPAccelerator.cpp ${_dsp}/DSPAnalyzer.cpp ${_dsp}/DSPAssembler.cpp
+    ${_dsp}/DSPCodeUtil.cpp ${_dsp}/DSPCore.cpp
+    ${_dsp}/DSPDisassembler.cpp ${_dsp}/DSPHWInterface.cpp ${_dsp}/DSPMemoryMap.cpp
+    ${_dsp}/DSPStacks.cpp ${_dsp}/DSPTables.cpp ${_dsp}/LabelMap.cpp
+    ${_dsp}/Interpreter/DSPIntArithmetic.cpp ${_dsp}/Interpreter/DSPIntBranch.cpp
+    ${_dsp}/Interpreter/DSPIntExtOps.cpp ${_dsp}/Interpreter/DSPIntLoadStore.cpp
+    ${_dsp}/Interpreter/DSPIntMisc.cpp ${_dsp}/Interpreter/DSPIntMultiplier.cpp
+    ${_dsp}/Interpreter/DSPIntTables.cpp ${_dsp}/Interpreter/DSPInterpreter.cpp
+    ${_dsp}/Jit/DSPEmitterBase.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/DSPHLE.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/MailHandler.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/AESnd.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/ASnd.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/AX.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/AXWii.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/CARD.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/GBA.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/INIT.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/ROM.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/UCodes.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/Zelda.cpp
+    ${_donor}/Source/Core/Core/HW/DSPHLE/UCodes/ZeldaUCodesTable.cpp
+    ${BLUEWAKE_REPO_ROOT}/apple/ios/src/dsp_common_shim.cpp)
+target_include_directories(bluewake_web_dsp_donor PUBLIC
+    ${_donor}/Source/Core ${_donor}/Source ${_donor}/Externals
+    ${BLUEWAKE_REPO_ROOT}/apple/ios/dsp_generated)
+# 32-bit wasm: _ARCH_32, where the desktop builds say _ARCH_64.
+target_compile_definitions(bluewake_web_dsp_donor PUBLIC
+    _ARCH_32=1 FMT_EXCEPTIONS=0 __STDC_CONSTANT_MACROS __STDC_LIMIT_MACROS)
+target_compile_features(bluewake_web_dsp_donor PUBLIC cxx_std_23)
+target_compile_options(bluewake_web_dsp_donor PRIVATE -fno-strict-aliasing -w)
+target_link_libraries(bluewake_web_dsp_donor PUBLIC fmt::fmt xxhash bluewake_web_zlib)
+
+add_library(bluewake_web_dsp_adapter STATIC EXCLUDE_FROM_ALL
+    ${BLUEWAKE_HOST_SRC}/dsp_adapter.cpp
+    ${BLUEWAKE_HOST_SRC}/dsp_adapter_c.cpp
+    ${BLUEWAKE_HOST_SRC}/dsp_adapter_donor_stubs.cpp
+    ${BLUEWAKE_HOST_SRC}/dsp_hle_backend.cpp)
+target_include_directories(bluewake_web_dsp_adapter PRIVATE ${GXRUNTIME_DIR}/include)
+target_link_libraries(bluewake_web_dsp_adapter PUBLIC bluewake_web_dsp_donor)
+target_compile_definitions(bluewake_web_host PRIVATE BLUEWAKE_HAS_DSP_ADAPTER=1)
+target_link_libraries(bluewake_web_host PRIVATE bluewake_web_dsp_adapter)

@@ -149,6 +149,7 @@ async function importDisc(file) {
       worker.postMessage({ op: 'import', file, kind: info.kind });
     });
     await showStoredDisc();
+    await showStoredModule();
   } catch (e) {
     setDiscStatus(`Import failed: ${e.message}`, true);
   } finally {
@@ -168,6 +169,120 @@ async function removeDisc() {
   });
   worker.terminate();
   await showStoredDisc();
+}
+
+// --- game module ------------------------------------------------------------
+async function storedModule() {
+  try {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('bluewake');
+    const file = await (await dir.getFileHandle('gGZLE01_recomp.so')).getFile();
+    return { size: file.size, modified: file.lastModified };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function showStoredModule() {
+  state.module = await storedModule();
+  $('module-status').textContent = state.module
+    ? `Stored: gGZLE01_recomp.so (${(state.module.size / 2 ** 20).toFixed(1)} MiB).`
+    : 'No game module stored in this browser yet.';
+  $('module-status').classList.remove('error');
+  $('remove-module').hidden = !state.module;
+  $('start').disabled = !(state.module && state.disc && runtimeReady());
+}
+
+// A WebAssembly side module starts with the wasm magic and a dylink.0 section.
+async function isSideModule(file) {
+  const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+  const magic = head[0] === 0 && head[1] === 0x61 && head[2] === 0x73 && head[3] === 0x6d;
+  if (!magic || head[8] !== 0) return false;
+  let at = 9;
+  while (head[at] & 0x80) at++; // the section's size (LEB128)
+  at++;
+  const length = head[at++];
+  return String.fromCharCode(...head.subarray(at, at + length)) === 'dylink.0';
+}
+
+async function workerOp(op, file, bar) {
+  const worker = new Worker('import-worker.js');
+  try {
+    return await new Promise((resolve, reject) => {
+      worker.onmessage = (e) => {
+        if (e.data.type === 'progress' && bar) bar.value = e.data.fraction;
+        else if (e.data.type === 'done') resolve(e.data);
+        else if (e.data.type === 'error') reject(new Error(e.data.message));
+      };
+      worker.onerror = (e) => reject(new Error(e.message));
+      worker.postMessage({ op, file });
+    });
+  } finally {
+    worker.terminate();
+  }
+}
+
+async function importModule(file) {
+  if (!(await isSideModule(file))) {
+    $('module-status').textContent = 'This is not a BlueWake game module for the browser (a WebAssembly side module, gGZLE01_recomp.so, built with web/README.md\'s steps).';
+    $('module-status').classList.add('error');
+    return;
+  }
+  const bar = $('module-progress');
+  bar.hidden = false;
+  $('module-status').textContent = `Storing ${file.name}…`;
+  try {
+    await workerOp('import-module', file, bar);
+    await showStoredModule();
+  } catch (e) {
+    $('module-status').textContent = `Import failed: ${e.message}`;
+    $('module-status').classList.add('error');
+  } finally {
+    bar.hidden = true;
+  }
+}
+
+// Variables for the host, as the desktop's environment: ?env=NAME=VALUE (repeatable).
+function pageEnv() {
+  const env = {};
+  for (const pair of new URLSearchParams(location.search).getAll('env')) {
+    const eq = pair.indexOf('=');
+    if (eq > 0) env[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+  return env;
+}
+
+// The game runs in a fresh page (?run=game): one WebAssembly runtime a page.
+async function startGame() {
+  $('run').disabled = $('start').disabled = true;
+  $('pick').disabled = $('pick-module').disabled = true;
+  const log = $('log');
+  log.textContent = '';
+  log.parentElement.open = true;
+  const game = (state.game = { started: performance.now(), exit: null, abort: null, retrace: 0, rate: 0, lines: 0 });
+  const line = (text) => {
+    game.lines++;
+    const m = /^\[perf\] retrace=(\d+) rate=([\d.]+)/.exec(text);
+    if (m) {
+      game.retrace = +m[1];
+      game.rate = +m[2];
+    }
+    if (log.textContent.length > 400000) log.textContent = log.textContent.slice(-200000);
+    log.textContent += text + '\n';
+  };
+  try {
+    const { default: createBlueWake } = await import('./bluewake.mjs');
+    await createBlueWake({
+      canvas: $('canvas'),
+      bluewakeEnv: pageEnv(),
+      print: line,
+      printErr: line,
+      onExit: (code) => { game.exit = code; line(`[web] the game exited (${code})`); },
+      onAbort: (what) => { game.abort = String(what); line(`[web] aborted: ${what}`); },
+    });
+  } catch (e) {
+    game.abort = String(e && e.message ? e.message : e);
+    line(`[web] the game did not start: ${game.abort}`);
+  }
 }
 
 // --- runtime check -----------------------------------------------------------
@@ -222,8 +337,24 @@ $('pick').addEventListener('change', (e) => {
 $('remove').addEventListener('click', removeDisc);
 $('run').addEventListener('click', runCheck);
 $('fullscreen').addEventListener('click', () => $('stage').requestFullscreen().catch(() => {}));
+$('pick-module').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (file) importModule(file);
+});
+$('remove-module').addEventListener('click', async () => {
+  await workerOp('remove-module');
+  await showStoredModule();
+});
+$('start').addEventListener('click', () => {
+  const url = new URL(location.href);
+  url.searchParams.set('run', 'game');
+  location.href = url.href;
+});
 
 await checkCapabilities();
 await showStoredDisc();
+await showStoredModule();
 $('run').disabled = !runtimeReady();
 state.ready = true;
+if (new URLSearchParams(location.search).get('run') === 'game') startGame();
